@@ -4,6 +4,7 @@ import com.vidrieria.backend_vidrieria.dto.TipoVidrioRequestDTO;
 import com.vidrieria.backend_vidrieria.dto.TipoVidrioResponseDTO;
 import com.vidrieria.backend_vidrieria.entity.TipoVidrio;
 import com.vidrieria.backend_vidrieria.repository.TipoVidrioRepository;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,9 +44,12 @@ public class TipoVidrioService {
                 .precioPlancha(request.getPrecioPlancha())
                 .anchoPlancha(request.getAnchoPlancha())
                 .altoPlancha(request.getAltoPlancha())
+                .anchoPlanchaMm(request.getAnchoPlanchaMm() != null ? request.getAnchoPlanchaMm() : 2440.0)
+                .altoPlanchaMm(request.getAltoPlanchaMm() != null ? request.getAltoPlanchaMm() : 3660.0)
                 .margenMayorista(request.getMargenMayorista())
                 .margenPublico(request.getMargenPublico())
                 .margenCorteChico(request.getMargenCorteChico())
+                .stock(request.getStock() != null ? request.getStock() : 0.0)
                 .activo(true)
                 .build();
 
@@ -59,21 +63,46 @@ public class TipoVidrioService {
     @Transactional
     public TipoVidrioResponseDTO actualizar(Integer id, TipoVidrioRequestDTO request) {
         TipoVidrio vidrio = tipoVidrioRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Tipo de vidrio no encontrado"));
+                .orElseThrow(() -> new EntityNotFoundException("Tipo de vidrio no encontrado con ID: " + id));
 
         vidrio.setNombre(request.getNombre());
         vidrio.setDescripcion(request.getDescripcion());
         vidrio.setImagenUrl(request.getImagenUrl());
-        vidrio.setEsTemplado(request.getEsTemplado());
-        vidrio.setDiasProduccion(request.getDiasProduccion());
+        if (request.getEsTemplado() != null) {
+            vidrio.setEsTemplado(request.getEsTemplado());
+        }
+        if (request.getDiasProduccion() != null) {
+            vidrio.setDiasProduccion(request.getDiasProduccion());
+        }
+        if (request.getIdProveedorHabitual() != null) {
+            vidrio.setIdProveedorHabitual(request.getIdProveedorHabitual());
+        }
+
+        // Asignación explícita de medidas estándar de fábrica (mm)
+        if (request.getAnchoPlanchaMm() != null) {
+            vidrio.setAnchoPlanchaMm(request.getAnchoPlanchaMm());
+        } else if (request.getAnchoPlancha() != null) {
+            vidrio.setAnchoPlanchaMm(request.getAnchoPlancha().doubleValue() * 1000.0);
+        }
+
+        if (request.getAltoPlanchaMm() != null) {
+            vidrio.setAltoPlanchaMm(request.getAltoPlanchaMm());
+        } else if (request.getAltoPlancha() != null) {
+            vidrio.setAltoPlanchaMm(request.getAltoPlancha().doubleValue() * 1000.0);
+        }
+
+        // Asignación explícita de precios, dimensiones base y márgenes comerciales
         vidrio.setCostoDefectoM2(request.getCostoDefectoM2());
-        vidrio.setIdProveedorHabitual(request.getIdProveedorHabitual());
         vidrio.setPrecioPlancha(request.getPrecioPlancha());
         vidrio.setAnchoPlancha(request.getAnchoPlancha());
         vidrio.setAltoPlancha(request.getAltoPlancha());
         vidrio.setMargenMayorista(request.getMargenMayorista());
         vidrio.setMargenPublico(request.getMargenPublico());
         vidrio.setMargenCorteChico(request.getMargenCorteChico());
+
+        if (request.getStock() != null) {
+            vidrio.setStock(request.getStock());
+        }
 
         TipoVidrio guardado = tipoVidrioRepository.save(vidrio);
         return mapToDTO(guardado);
@@ -85,7 +114,7 @@ public class TipoVidrioService {
     @Transactional
     public void eliminar(Integer id) {
         TipoVidrio vidrio = tipoVidrioRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Tipo de vidrio no encontrado"));
+                .orElseThrow(() -> new EntityNotFoundException("Tipo de vidrio no encontrado con ID: " + id));
 
         vidrio.setActivo(false);
         tipoVidrioRepository.save(vidrio);
@@ -105,10 +134,26 @@ public class TipoVidrioService {
         BigDecimal precioPubM2 = costoRealM2.multiply(BigDecimal.ONE.add(margenPub)).setScale(2, RoundingMode.HALF_UP);
         BigDecimal precioChicoM2 = costoRealM2.multiply(BigDecimal.ONE.add(margenChico)).setScale(2, RoundingMode.HALF_UP);
 
+        Double anchoFinal = resolverDimensionMm(v.getAnchoPlanchaMm(), v.getAnchoPlancha(), 2440.0);
+        Double altoFinal = resolverDimensionMm(v.getAltoPlanchaMm(), v.getAltoPlancha(), 3660.0);
+
         return TipoVidrioResponseDTO.builder()
                 .idVidrio(v.getIdVidrio())
                 .nombre(v.getNombre())
+                .descripcion(v.getDescripcion())
+                .imagenUrl(v.getImagenUrl())
                 .esTemplado(v.getEsTemplado())
+                .diasProduccion(v.getDiasProduccion())
+                .idProveedorHabitual(v.getIdProveedorHabitual())
+                .costoDefectoM2(v.getCostoDefectoM2())
+                .precioPlancha(v.getPrecioPlancha())
+                .anchoPlancha(anchoFinal)
+                .altoPlancha(altoFinal)
+                .anchoPlanchaMm(anchoFinal)
+                .altoPlanchaMm(altoFinal)
+                .margenMayorista(v.getMargenMayorista())
+                .margenPublico(v.getMargenPublico())
+                .margenCorteChico(v.getMargenCorteChico())
                 .costoRealM2(costoRealM2)
                 .precioMayoristaM2(precioMayM2)
                 .precioMayoristaPie2(m2aPie2(precioMayM2))
@@ -116,7 +161,19 @@ public class TipoVidrioService {
                 .precioPublicoPie2(m2aPie2(precioPubM2))
                 .precioCorteChicoM2(precioChicoM2)
                 .precioCorteChicoPie2(m2aPie2(precioChicoM2))
+                .stock(v.getStock() != null ? v.getStock() : 0.0)
                 .build();
+    }
+
+    private Double resolverDimensionMm(Double valorMm, BigDecimal valorGenerico, double defaultMm) {
+        if (valorMm != null && valorMm > 0) {
+            return valorMm;
+        }
+        if (valorGenerico != null && valorGenerico.compareTo(BigDecimal.ZERO) > 0) {
+            double val = valorGenerico.doubleValue();
+            return val > 100.0 ? val : val * 1000.0;
+        }
+        return defaultMm;
     }
 
     /**

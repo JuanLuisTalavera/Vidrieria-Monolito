@@ -2,6 +2,8 @@ package com.vidrieria.backend_vidrieria.repository;
 
 import com.vidrieria.backend_vidrieria.entity.Pedido;
 import com.vidrieria.backend_vidrieria.entity.Usuario;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -13,6 +15,15 @@ import java.util.List;
 
 @Repository
 public interface PedidoRepository extends JpaRepository<Pedido, Integer> {
+
+    @Query("SELECT p.idPedido FROM Pedido p")
+    Page<Integer> findPaginatedIds(Pageable pageable);
+
+    @Query("SELECT DISTINCT p FROM Pedido p LEFT JOIN FETCH p.vendedor LEFT JOIN FETCH p.detalles d LEFT JOIN FETCH d.moldura LEFT JOIN FETCH d.vidrio WHERE p.idPedido IN :ids")
+    List<Pedido> findPedidosWithDetails(@Param("ids") List<Integer> ids);
+
+    @Query("SELECT DISTINCT p FROM Pedido p LEFT JOIN FETCH p.vendedor LEFT JOIN FETCH p.detalles d LEFT JOIN FETCH d.moldura LEFT JOIN FETCH d.vidrio ORDER BY p.fechaRegistro DESC")
+    List<Pedido> findAllOptimizado();
 
     List<Pedido> findByEstado(String estado);
 

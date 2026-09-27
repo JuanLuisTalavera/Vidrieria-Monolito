@@ -64,4 +64,16 @@ public class TipoVidrio {
 
     @Column(name = "margen_corte_chico", precision = 5, scale = 4)
     private BigDecimal margenCorteChico;
+
+    @Column(name = "ancho_plancha_mm")
+    @Builder.Default
+    private Double anchoPlanchaMm = 2440.0;
+
+    @Column(name = "alto_plancha_mm")
+    @Builder.Default
+    private Double altoPlanchaMm = 3660.0;
+
+    @Column(name = "stock")
+    @Builder.Default
+    private Double stock = 0.0;
 }

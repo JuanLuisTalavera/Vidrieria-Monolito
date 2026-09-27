@@ -23,6 +23,10 @@ public interface PagoRepository extends JpaRepository<Pago, Integer> {
     // Listar pagos de un pedido específico ordenados por fecha ascendente
     List<Pago> findByPedidoIdPedidoOrderByFechaRegistroAsc(Integer idPedido);
 
+    // Listar pagos por lista de IDs de pedidos (precarga registrador y ordena ascendentemente)
+    @Query("SELECT p FROM Pago p LEFT JOIN FETCH p.registrador WHERE p.pedido.idPedido IN :ids ORDER BY p.fechaRegistro ASC")
+    List<Pago> findByPedidoIdPedidoIn(@Param("ids") List<Integer> ids);
+
     // Sumar caja real del día en base a pagos
     @Query("SELECT COALESCE(SUM(p.monto), 0) FROM Pago p WHERE p.fechaRegistro >= :inicio AND p.fechaRegistro <= :fin")
     BigDecimal sumarCajaRealPorFecha(@Param("inicio") LocalDateTime inicio, @Param("fin") LocalDateTime fin);

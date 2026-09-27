@@ -56,4 +56,16 @@ public class DetallePedido {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "detalles_despiece", columnDefinition = "jsonb")
     private String detallesDespiece;
+
+    @Builder.Default
+    @Column(name = "descontar_stock")
+    private Boolean descontarStock = true;
+
+    public Boolean getDescontarStock() {
+        return descontarStock != null ? descontarStock : true;
+    }
+
+    public Boolean isDescontarStock() {
+        return getDescontarStock();
+    }
 }

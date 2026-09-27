@@ -17,6 +17,17 @@ import com.vidrieria.backend_vidrieria.repository.PedidoRepository;
 import com.vidrieria.backend_vidrieria.repository.TipoVidrioRepository;
 import com.vidrieria.backend_vidrieria.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vidrieria.backend_vidrieria.dto.AccesorioItemDTO;
+import com.vidrieria.backend_vidrieria.dto.DespieceObraResponseDTO;
+import com.vidrieria.backend_vidrieria.dto.PiezaAluminioDTO;
+import com.vidrieria.backend_vidrieria.dto.PiezaCristalDTO;
+import jakarta.persistence.EntityNotFoundException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -24,10 +35,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class PedidoService {
 
     private static final String ESTADO_INICIAL = "COTIZADO";
@@ -36,7 +51,8 @@ public class PedidoService {
     private final UsuarioRepository usuarioRepository;
     private final MaterialRepository materialRepository;
     private final TipoVidrioRepository tipoVidrioRepository;
-    private final com.vidrieria.backend_vidrieria.repository.PagoRepository pagoRepository;
+    private final PagoRepository pagoRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
      * Registra un nuevo pedido/orden de trabajo con todos sus detalles.
@@ -62,11 +78,25 @@ public class PedidoService {
                 ? request.getMetodoPago()
                 : "EFECTIVO";
 
+        // Determinar tipo de trabajo: detectar automáticamente pedidos mixtos
+        String tipoTrabajo = request.getTipoTrabajo();
+        if (request.getDetalles() != null && !request.getDetalles().isEmpty()) {
+            boolean tieneMoldura = request.getDetalles().stream()
+                    .anyMatch(d -> d.getIdMoldura() != null);
+            boolean tieneVidrioSuelto = request.getDetalles().stream()
+                    .anyMatch(d -> d.getIdMoldura() == null && d.getIdVidrio() != null);
+
+            if (tieneMoldura && tieneVidrioSuelto) {
+                tipoTrabajo = "MIXTO";
+                request.setTipoTrabajo("MIXTO");
+            }
+        }
+
         Pedido pedido = Pedido.builder()
                 .clienteNombre(request.getClienteNombre())
                 .clienteTelefono(request.getClienteTelefono())
                 .referenciaObra(request.getReferenciaObra())
-                .tipoTrabajo(request.getTipoTrabajo())
+                .tipoTrabajo(tipoTrabajo)
                 .estado(ESTADO_INICIAL)
                 .montoAdelanto(adelanto)
                 .tipoComprobante(request.getTipoComprobante())
@@ -74,7 +104,9 @@ public class PedidoService {
                 .vendedor(vendedor)
                 .fechaCreacion(Instant.now())
                 .fechaRegistro(java.time.LocalDateTime.now())
+                .fechaEntrega(request.getFechaEntrega())
                 .build();
+        pedido.setFechaEntrega(request.getFechaEntrega());
 
         // --- b) Mapear detalles, relacionar pedido padre y calcular total acumulando subtotales ---
         BigDecimal totalCalculado = BigDecimal.ZERO;
@@ -119,9 +151,15 @@ public class PedidoService {
                         .descripcion(dto.getDescripcion())
                         .precioUnitario(dto.getPrecioUnitario())
                         .detallesDespiece(dto.getDetallesDespiece())
+                        .descontarStock(dto.getDescontarStock())
                         .build();
 
                 pedido.agregarDetalle(detalle); // asigna detalle.setPedido(pedido)
+
+                // Descuento condicional de inventario
+                if (Boolean.TRUE.equals(detalle.getDescontarStock())) {
+                    procesarDescuentoInventario(detalle);
+                }
             }
         }
 
@@ -160,13 +198,79 @@ public class PedidoService {
     }
 
     /**
-     * Devuelve todos los pedidos registrados como DTOs.
+     * Devuelve todos los pedidos registrados como DTOs evitando N+1 en relaciones hijas y pagos.
      */
     @Transactional(readOnly = true)
     public List<PedidoResponseDTO> listarTodos() {
-        return pedidoRepository.findAll().stream()
-                .map(this::mapToResponseDTO)
+        List<Pedido> pedidos = pedidoRepository.findAllOptimizado();
+        if (pedidos.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Integer> ids = pedidos.stream()
+                .map(Pedido::getIdPedido)
                 .toList();
+
+        List<Pago> todosLosPagos = pagoRepository.findByPedidoIdPedidoIn(ids);
+
+        Map<Integer, List<Pago>> pagosPorPedido = todosLosPagos.stream()
+                .collect(Collectors.groupingBy(p -> p.getPedido().getIdPedido()));
+
+        return pedidos.stream()
+                .map(p -> mapToResponseDTO(p, pagosPorPedido.getOrDefault(p.getIdPedido(), Collections.emptyList())))
+                .toList();
+    }
+
+    /**
+     * Devuelve pedidos paginados aplicando el patrón de paginar IDs primero
+     * para evitar el desbordamiento de memoria y advertencias HHH000104 de Hibernate.
+     *
+     * @param page    número de página (0-indexado)
+     * @param size    cantidad de elementos por página
+     * @param sortDir dirección de ordenamiento ("ASC" o "DESC")
+     * @return Página de PedidoResponseDTO con sus detalles y pagos
+     */
+    @Transactional(readOnly = true)
+    public Page<PedidoResponseDTO> listarPaginados(int page, int size, String sortDir) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
+                page,
+                size,
+                org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Direction.fromString(sortDir),
+                        "fechaRegistro"
+                )
+        );
+        Page<Integer> pageIds = pedidoRepository.findPaginatedIds(pageable);
+
+        if (pageIds.isEmpty()) {
+            return Page.empty(pageable);
+        }
+
+        // Traer las entidades completas solo para los IDs de esta página
+        List<Pedido> pedidos = pedidoRepository.findPedidosWithDetails(pageIds.getContent());
+        List<Integer> ids = pedidos.stream().map(Pedido::getIdPedido).toList();
+
+        // Obtener los pagos solo de esta página (sin bucles)
+        List<Pago> todosLosPagos = pagoRepository.findByPedidoIdPedidoIn(ids);
+        Map<Integer, List<Pago>> pagosPorPedido = todosLosPagos.stream()
+                .collect(Collectors.groupingBy(p -> p.getPedido().getIdPedido()));
+
+        Map<Integer, Pedido> pedidosPorId = pedidos.stream()
+                .collect(Collectors.toMap(Pedido::getIdPedido, p -> p, (a, b) -> a));
+
+        // Mapear manteniendo el orden original de la paginación según los IDs ordenados
+        List<PedidoResponseDTO> dtoList = pageIds.getContent().stream()
+                .map(pedidosPorId::get)
+                .filter(java.util.Objects::nonNull)
+                .map(p -> mapToResponseDTO(p, pagosPorPedido.getOrDefault(p.getIdPedido(), List.of())))
+                .toList();
+
+        return new PageImpl<>(dtoList, pageable, pageIds.getTotalElements());
+    }
+
+    @Transactional(readOnly = true)
+    public Page<PedidoResponseDTO> listarPaginados(int page, int size) {
+        return listarPaginados(page, size, "DESC");
     }
 
     /**
@@ -179,12 +283,170 @@ public class PedidoService {
     @Transactional
     public PedidoResponseDTO actualizarEstado(Integer idPedido, String nuevoEstado) {
         Pedido pedido = pedidoRepository.findById(idPedido)
-                .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
+                .orElseThrow(() -> new EntityNotFoundException("Pedido no encontrado con ID: " + idPedido));
+
+        if ("CONFIRMADO".equalsIgnoreCase(nuevoEstado)) {
+            descontarStockPendiente(pedido);
+        }
 
         pedido.setEstado(nuevoEstado);
         Pedido guardado = pedidoRepository.save(pedido);
 
         return mapToResponseDTO(guardado);
+    }
+
+    /**
+     * Confirma un pedido proveniente de una obra o cotización y descuenta el inventario real bajo transacción.
+     */
+    @Transactional
+    public PedidoResponseDTO confirmarPedido(Integer idPedido) {
+        Pedido pedido = pedidoRepository.findById(idPedido)
+                .orElseThrow(() -> new EntityNotFoundException("Pedido no encontrado con ID: " + idPedido));
+
+        descontarStockPendiente(pedido);
+        pedido.setEstado("CONFIRMADO");
+
+        Pedido guardado = pedidoRepository.save(pedido);
+        return mapToResponseDTO(guardado);
+    }
+
+    private void descontarStockPendiente(Pedido pedido) {
+        if (pedido.getDetalles() != null) {
+            for (DetallePedido detalle : pedido.getDetalles()) {
+                if (Boolean.TRUE.equals(detalle.getDescontarStock())) {
+                    procesarDescuentoInventario(detalle);
+                }
+            }
+        }
+    }
+
+    /**
+     * Descuenta el inventario real del detalle:
+     * - Si proviene de obra con detallesDespiece:
+     *   * Aluminio: Convierte mm/metros lineales a varillas y descuenta la fracción del stock.
+     *   * Vidrio: Suma el área (m2) y descuenta del stock de la plancha.
+     *   * Accesorios: Descuenta las unidades exactas.
+     * - Si es estándar (sin despiece):
+     *   * Moldura y vidrio simple según dimensiones.
+     */
+    private void procesarDescuentoInventario(DetallePedido detalle) {
+        int cantDetalle = (detalle.getCantidad() != null && detalle.getCantidad() > 0)
+                ? detalle.getCantidad()
+                : 1;
+
+        if (detalle.getDetallesDespiece() != null && !detalle.getDetallesDespiece().trim().isEmpty()) {
+            try {
+                DespieceObraResponseDTO despiece = objectMapper.readValue(
+                        detalle.getDetallesDespiece(),
+                        DespieceObraResponseDTO.class
+                );
+
+                if (despiece != null) {
+                    // 1. Descontar Aluminio
+                    if (despiece.getPiezasAluminio() != null) {
+                        for (PiezaAluminioDTO pieza : despiece.getPiezasAluminio()) {
+                            String nombre = pieza.getNombrePerfil();
+                            Material mat = materialRepository.findByNombreIgnoreCase(nombre)
+                                    .orElseGet(() -> materialRepository.findByNombre(nombre)
+                                            .orElseThrow(() -> new EntityNotFoundException("Material '" + nombre + "' no encontrado en el inventario")));
+
+                            double longitudMm = (pieza.getLongitudTotalMm() != null && pieza.getLongitudTotalMm() > 0)
+                                    ? pieza.getLongitudTotalMm()
+                                    : (pieza.getLongitudMm() != null ? pieza.getLongitudMm() * pieza.getCantidad() : 0.0);
+
+                            double metrosLineales = longitudMm / 1000.0;
+                            double longitudVarillaM = (mat.getLongitudVarilla() != null && mat.getLongitudVarilla().doubleValue() > 0)
+                                    ? mat.getLongitudVarilla().doubleValue()
+                                    : 6.0;
+                            if (longitudVarillaM > 100.0) {
+                                longitudVarillaM /= 1000.0;
+                            }
+
+                            double varillasADescontar = (metrosLineales / longitudVarillaM) * cantDetalle;
+                            double stockActual = (mat.getStock() != null) ? mat.getStock() : 0.0;
+                            mat.setStock(stockActual - varillasADescontar);
+                            materialRepository.save(mat);
+                        }
+                    }
+
+                    // 2. Descontar Vidrio
+                    if (despiece.getPiezasCristal() != null) {
+                        for (PiezaCristalDTO cristal : despiece.getPiezasCristal()) {
+                            TipoVidrio vidrio = detalle.getVidrio();
+                            if (vidrio == null && cristal.getDescripcion() != null) {
+                                String desc = cristal.getDescripcion().trim();
+                                vidrio = tipoVidrioRepository.findByNombreIgnoreCase(desc)
+                                        .orElseGet(() -> tipoVidrioRepository.findByNombre(desc)
+                                                .orElse(null));
+                            }
+                            if (vidrio == null) {
+                                throw new EntityNotFoundException("Vidrio '" + cristal.getDescripcion() + "' no encontrado en el inventario");
+                            }
+
+                            double areaM2 = (cristal.getAreaM2Total() != null && cristal.getAreaM2Total() > 0)
+                                    ? cristal.getAreaM2Total()
+                                    : ((cristal.getAreaM2Unitaria() != null ? cristal.getAreaM2Unitaria() : 0.0) * cristal.getCantidad());
+
+                            double areaTotalM2 = areaM2 * cantDetalle;
+                            double stockActual = (vidrio.getStock() != null) ? vidrio.getStock() : 0.0;
+
+                            if (vidrio.getAnchoPlancha() != null && vidrio.getAltoPlancha() != null
+                                    && (vidrio.getAnchoPlancha().doubleValue() * vidrio.getAltoPlancha().doubleValue()) > 0) {
+                                double areaPlancha = vidrio.getAnchoPlancha().doubleValue() * vidrio.getAltoPlancha().doubleValue();
+                                double planchasADescontar = areaTotalM2 / areaPlancha;
+                                vidrio.setStock(stockActual - planchasADescontar);
+                            } else {
+                                vidrio.setStock(stockActual - areaTotalM2);
+                            }
+                            tipoVidrioRepository.save(vidrio);
+                        }
+                    }
+
+                    // 3. Descontar Accesorios
+                    if (despiece.getAccesorios() != null) {
+                        for (AccesorioItemDTO acc : despiece.getAccesorios()) {
+                            String desc = acc.getDescripcion();
+                            Material mat = materialRepository.findByNombreIgnoreCase(desc)
+                                    .orElseGet(() -> materialRepository.findByNombre(desc)
+                                            .orElseThrow(() -> new EntityNotFoundException("Material '" + desc + "' no encontrado en el inventario")));
+
+                            double unidadesADescontar = (acc.getCantidad() != null ? acc.getCantidad() : 1.0) * cantDetalle;
+                            double stockActual = (mat.getStock() != null) ? mat.getStock() : 0.0;
+                            mat.setStock(stockActual - unidadesADescontar);
+                            materialRepository.save(mat);
+                        }
+                    }
+                }
+            } catch (EntityNotFoundException enfe) {
+                throw enfe;
+            } catch (Exception e) {
+                log.error("Error al parsear detallesDespiece para descuento de inventario", e);
+                throw new RuntimeException("Error procesando el despiece del pedido: " + e.getMessage(), e);
+            }
+        } else {
+            // Descuento estándar para marcos / molduras y vidrio simple
+            double altoVal = (detalle.getAlto() != null) ? detalle.getAlto().doubleValue() : 0.0;
+            double anchoVal = (detalle.getAncho() != null) ? detalle.getAncho().doubleValue() : 0.0;
+
+            if (detalle.getMoldura() != null) {
+                Material moldura = detalle.getMoldura();
+                double metros = ((2.0 * (altoVal + anchoVal)) / 100.0) * cantDetalle;
+                double stockMoldura = (moldura.getStock() != null) ? moldura.getStock() : 0.0;
+                moldura.setStock(stockMoldura - metros);
+                materialRepository.save(moldura);
+            }
+
+            if (detalle.getVidrio() != null) {
+                TipoVidrio vidrio = detalle.getVidrio();
+                double m2 = ((altoVal * anchoVal) / 10000.0) * cantDetalle;
+                double stockVidrio = (vidrio.getStock() != null) ? vidrio.getStock() : 0.0;
+                vidrio.setStock(stockVidrio - m2);
+                tipoVidrioRepository.save(vidrio);
+            }
+        }
+
+        // Marcar que el stock ya fue descontado para este detalle
+        detalle.setDescontarStock(false);
     }
 
     /**
@@ -317,42 +579,51 @@ public class PedidoService {
     // ----- Mapeo entidad → DTO de respuesta -----
 
     public PedidoResponseDTO mapToResponseDTO(Pedido pedido) {
+        List<Pago> pagos = (pedido.getIdPedido() != null)
+                ? pagoRepository.findByPedidoIdPedidoOrderByFechaRegistroAsc(pedido.getIdPedido())
+                : Collections.emptyList();
+        return mapToResponseDTO(pedido, pagos);
+    }
 
-        List<PedidoResponseDTO.DetalleResponseDTO> detallesDTO = pedido.getDetalles().stream()
-                .map(d -> {
-                    Integer idMoldura = d.getMoldura() != null ? d.getMoldura().getIdMaterial() : null;
-                    String nombreMoldura = d.getMoldura() != null ? d.getMoldura().getNombre() : null;
-                    Integer idVidrio = d.getVidrio() != null ? d.getVidrio().getIdVidrio() : null;
-                    String nombreVidrio = d.getVidrio() != null ? d.getVidrio().getNombre() : null;
+    public PedidoResponseDTO mapToResponseDTO(Pedido pedido, List<Pago> pagos) {
 
-                    return PedidoResponseDTO.DetalleResponseDTO.builder()
-                            .idDetalle(d.getIdDetalle())
-                            .alto(d.getAlto())
-                            .ancho(d.getAncho())
-                            .cantidad(d.getCantidad())
-                            .subtotal(d.getSubtotal())
-                            .idMoldura(idMoldura)
-                            .nombreMoldura(nombreMoldura)
-                            .idVidrio(idVidrio)
-                            .nombreVidrio(nombreVidrio)
-                            .descripcion(d.getDescripcion())
-                            .precioUnitario(d.getPrecioUnitario())
-                            .altoVano(d.getAlto())
-                            .anchoVano(d.getAncho())
-                            .detallesDespiece(d.getDetallesDespiece())
-                            .build();
-                })
-                .toList();
+        List<PedidoResponseDTO.DetalleResponseDTO> detallesDTO = pedido.getDetalles() != null
+                ? pedido.getDetalles().stream()
+                        .map(d -> {
+                            Integer idMoldura = d.getMoldura() != null ? d.getMoldura().getIdMaterial() : null;
+                            String nombreMoldura = d.getMoldura() != null ? d.getMoldura().getNombre() : null;
+                            Integer idVidrio = d.getVidrio() != null ? d.getVidrio().getIdVidrio() : null;
+                            String nombreVidrio = d.getVidrio() != null ? d.getVidrio().getNombre() : null;
+
+                            return PedidoResponseDTO.DetalleResponseDTO.builder()
+                                    .idDetalle(d.getIdDetalle())
+                                    .alto(d.getAlto())
+                                    .ancho(d.getAncho())
+                                    .cantidad(d.getCantidad())
+                                    .subtotal(d.getSubtotal())
+                                    .idMoldura(idMoldura)
+                                    .nombreMoldura(nombreMoldura)
+                                    .idVidrio(idVidrio)
+                                    .nombreVidrio(nombreVidrio)
+                                    .descripcion(d.getDescripcion())
+                                    .precioUnitario(d.getPrecioUnitario())
+                                    .altoVano(d.getAlto())
+                                    .anchoVano(d.getAncho())
+                                    .detallesDespiece(d.getDetallesDespiece())
+                                    .descontarStock(d.getDescontarStock())
+                                    .build();
+                        })
+                        .toList()
+                : Collections.emptyList();
 
         Integer idVendedor = pedido.getVendedor() != null ? pedido.getVendedor().getIdUsuario() : null;
         String vendedorUsername = pedido.getVendedor() != null ? pedido.getVendedor().getUsername() : null;
 
-        List<PagoResponseDTO> pagosDTO = (pedido.getIdPedido() != null)
-                ? pagoRepository.findByPedidoIdPedidoOrderByFechaRegistroAsc(pedido.getIdPedido())
-                        .stream()
+        List<PagoResponseDTO> pagosDTO = (pagos != null)
+                ? pagos.stream()
                         .map(this::mapPagoToDTO)
                         .toList()
-                : List.of();
+                : Collections.emptyList();
 
         return PedidoResponseDTO.builder()
                 .idPedido(pedido.getIdPedido())
@@ -367,6 +638,7 @@ public class PedidoService {
                 .tipoComprobante(pedido.getTipoComprobante())
                 .metodoPago(pedido.getMetodoPago())
                 .fechaRegistro(pedido.getFechaRegistro())
+                .fechaEntrega(pedido.getFechaEntrega())
                 .idVendedor(idVendedor)
                 .vendedorUsername(vendedorUsername)
                 .detalles(detallesDTO)

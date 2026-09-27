@@ -26,6 +26,7 @@ public class PedidoResponseDTO {
     private String tipoComprobante;
     private String metodoPago;
     private java.time.LocalDateTime fechaRegistro;
+    private java.time.LocalDateTime fechaEntrega;
     private Integer idVendedor;
     private String vendedorUsername;
     private List<DetalleResponseDTO> detalles;
@@ -50,5 +51,16 @@ public class PedidoResponseDTO {
         private BigDecimal anchoVano;
         private BigDecimal altoVano;
         private String detallesDespiece;
+
+        @Builder.Default
+        private Boolean descontarStock = true;
+
+        public Boolean getDescontarStock() {
+            return descontarStock != null ? descontarStock : true;
+        }
+
+        public Boolean isDescontarStock() {
+            return getDescontarStock();
+        }
     }
 }

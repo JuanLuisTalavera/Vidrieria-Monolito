@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axiosClient from '../api/axiosClient';
 
 // Configuración de los estados del taller de marquería
@@ -50,12 +50,16 @@ export default function PedidosPage() {
   const [pedidos, setPedidos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [page, setPage] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalElements, setTotalElements] = useState(0);
   const [selectedPedido, setSelectedPedido] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [actualizandoId, setActualizandoId] = useState(null);
   const [feedbackNotif, setFeedbackNotif] = useState(null);
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('TODOS');
+  const [sortDir, setSortDir] = useState('DESC');
 
   // Estado para el Modal de Historial de Pagos
   const [modalPagosAbierto, setModalPagosAbierto] = useState(false);
@@ -247,47 +251,33 @@ export default function PedidosPage() {
     }
   };
 
-  const fetchPedidos = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await axiosClient.get('/api/v1/pedidos');
-      setPedidos(Array.isArray(response.data) ? response.data : []);
-    } catch (err) {
-      console.error('Error al obtener los pedidos:', err);
-      setError('No se pudo cargar la lista de pedidos. Por favor, intenta de nuevo.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const cargarPedidosIniciales = async () => {
+  const fetchPedidos = useCallback(
+    async (pagina = page) => {
+      const pageToFetch = typeof pagina === 'number' ? pagina : page;
+      setLoading(true);
+      setError(null);
       try {
-        const response = await axiosClient.get('/api/v1/pedidos');
-        if (isMounted) {
-          setPedidos(Array.isArray(response.data) ? response.data : []);
-        }
+        const res = await axiosClient.get(
+          `/api/v1/pedidos/paginados?page=${pageToFetch}&size=20&sortDir=${sortDir}`
+        );
+        const content = Array.isArray(res.data?.content) ? res.data.content : [];
+        setPedidos(content);
+        setTotalPages(res.data?.totalPages > 0 ? res.data.totalPages : 1);
+        setTotalElements(res.data?.totalElements ?? 0);
       } catch (err) {
         console.error('Error al obtener los pedidos:', err);
-        if (isMounted) {
-          setError('No se pudo cargar la lista de pedidos. Por favor, intenta de nuevo.');
-        }
+        setError('No se pudo cargar la lista de pedidos. Por favor, intenta de nuevo.');
+        setPedidos([]);
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
-    };
+    },
+    [page, sortDir]
+  );
 
-    cargarPedidosIniciales();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  useEffect(() => {
+    fetchPedidos(page);
+  }, [page, sortDir, fetchPedidos]);
 
   // Función para actualizar estado vía PATCH y refrescar UI inmediatamente
   const handleCambiarEstado = async (idPedido, nuevoEstado) => {
@@ -436,6 +426,92 @@ export default function PedidosPage() {
   const getEstadoLabel = (estado) => {
     const normalizado = (estado || '').toUpperCase().trim();
     return ESTADOS_MAP[normalizado]?.label || estado?.replace('_', ' ') || 'SIN ESTADO';
+  };
+
+  // Enviar comprobante / nota de pedido por WhatsApp
+  const enviarComprobanteWhatsApp = (pedido) => {
+    if (!pedido) return;
+
+    const rawTel = String(pedido.clienteTelefono || '').trim();
+    let telefonoLimpio = rawTel.replace(/\D/g, '');
+
+    // Si ya viene con prefijo 51 (11 dígitos peruanos), retirar para no duplicar con wa.me/51${telefonoLimpio}
+    if (telefonoLimpio.startsWith('51') && telefonoLimpio.length === 11) {
+      telefonoLimpio = telefonoLimpio.substring(2);
+    }
+
+    // Validación si no tiene teléfono o es genérico
+    if (!telefonoLimpio || telefonoLimpio.length < 9 || rawTel.toLowerCase().includes('sin')) {
+      const nuevoTel = window.prompt(
+        `El cliente "${pedido.clienteNombre || 'Cliente'}" no tiene un número celular registrado.\nPor favor ingresa su número de WhatsApp (ej. 987654321):`,
+        telefonoLimpio || ''
+      );
+      if (!nuevoTel) return;
+      telefonoLimpio = nuevoTel.replace(/\D/g, '');
+      if (telefonoLimpio.startsWith('51') && telefonoLimpio.length === 11) {
+        telefonoLimpio = telefonoLimpio.substring(2);
+      }
+    }
+
+    if (!telefonoLimpio) {
+      alert('No se puede enviar el comprobante sin un número de teléfono válido.');
+      return;
+    }
+
+    const nombreCliente = (pedido.clienteNombre || 'Cliente').trim();
+    const id = pedido.idPedido || pedido.id || '—';
+    const total = Number(pedido.total ?? 0).toFixed(2);
+    const adelanto = Number(pedido.montoAdelanto ?? 0).toFixed(2);
+    const saldoPendienteCalculado = pedido.saldoPendiente != null
+      ? Number(pedido.saldoPendiente)
+      : Math.max(0, Number(pedido.total || 0) - Number(pedido.montoAdelanto || 0));
+    const saldo = saldoPendienteCalculado.toFixed(2);
+    const estado = getEstadoLabel(pedido.estado);
+
+    // Formateo de lista de ítems con medidas y moldura
+    let listaItems = '';
+    if (Array.isArray(pedido.detalles) && pedido.detalles.length > 0) {
+      listaItems = pedido.detalles
+        .map((d, idx) => {
+          const cant = d.cantidad && d.cantidad > 1 ? `${d.cantidad}x ` : '';
+          const medidas = (d.ancho && d.alto)
+            ? `${d.ancho}x${d.alto} cm`
+            : (d.anchoVano && d.altoVano ? `${d.anchoVano}x${d.altoVano} cm` : '');
+          const moldura = d.nombreMoldura || d.molduraNombre || '';
+          const vidrio = d.nombreVidrio || d.vidrioNombre || '';
+
+          if (medidas && moldura) {
+            const textoVidrio = vidrio ? ` / Vidrio: ${vidrio}` : '';
+            return `• ${cant}Cuadro ${medidas} - Moldura: ${moldura}${textoVidrio}`;
+          }
+          if (d.descripcion) {
+            return `• ${cant}${d.descripcion}`;
+          }
+          if (medidas) {
+            return `• ${cant}Cuadro ${medidas}`;
+          }
+          return `• ${cant}Ítem #${idx + 1}`;
+        })
+        .join('\n');
+    } else if (pedido.referenciaObra) {
+      listaItems = `• ${pedido.referenciaObra}`;
+    } else {
+      listaItems = '• Cuadro(s) a medida';
+    }
+
+    const mensaje = 
+`*¡Hola ${nombreCliente}! Gracias por tu preferencia en Vidriería y Marquería.*
+📋 *Nota de Pedido #${id}*
+-------------------------
+${listaItems}
+-------------------------
+💰 *Total:* S/ ${total}
+💵 *Adelanto:* S/ ${adelanto}
+⏳ *Saldo pendiente:* S/ ${saldo}
+📍 *Estado:* ${estado}
+Te avisaremos apenas tu pedido esté listo para entrega en taller.`;
+
+    window.open(`https://wa.me/51${telefonoLimpio}?text=${encodeURIComponent(mensaje)}`, '_blank');
   };
 
   // Renderizado de icono para botón de siguiente estado
@@ -613,7 +689,7 @@ export default function PedidosPage() {
               onChange={(e) => setFiltroEstado(e.target.value)}
               className="w-full pl-4 pr-10 py-2.5 bg-white border border-slate-200 focus:border-indigo-500 rounded-lg text-sm text-slate-700 font-medium appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 shadow-xs transition-all cursor-pointer"
             >
-              <option value="TODOS">Todos</option>
+              <option value="TODOS">Todos los estados</option>
               <option value="COTIZADO">Cotizado</option>
               <option value="EN_TALLER">En Taller</option>
               <option value="LISTO">Listo</option>
@@ -622,6 +698,27 @@ export default function PedidosPage() {
             <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Selector de Orden Cronológico */}
+          <div className="relative w-full md:w-60">
+            <select
+              value={sortDir}
+              onChange={(e) => {
+                setSortDir(e.target.value);
+                setPage(0);
+              }}
+              className="w-full pl-4 pr-10 py-2.5 bg-white border border-slate-200 focus:border-indigo-500 rounded-lg text-sm text-slate-700 font-medium appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20 shadow-xs transition-all cursor-pointer"
+              title="Ordenar pedidos cronológicamente"
+            >
+              <option value="DESC">Más recientes primero (DESC)</option>
+              <option value="ASC">Más antiguos primero (ASC)</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
               </svg>
             </div>
           </div>
@@ -703,6 +800,7 @@ export default function PedidosPage() {
                   <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold uppercase tracking-wider text-slate-500">
                     <th scope="col" className="px-5 py-3.5">ID</th>
                     <th scope="col" className="px-5 py-3.5">Cliente</th>
+                    <th scope="col" className="px-5 py-3.5">Fechas</th>
                     <th scope="col" className="px-5 py-3.5">Teléfono</th>
                     <th scope="col" className="px-5 py-3.5">Trabajo</th>
                     <th scope="col" className="px-5 py-3.5 text-right">Total (S/)</th>
@@ -728,6 +826,28 @@ export default function PedidosPage() {
                         </td>
                         <td className="px-5 py-4 font-semibold text-slate-900">
                           {pedido.clienteNombre || 'Sin nombre'}
+                        </td>
+                        <td className="px-5 py-4 text-xs whitespace-nowrap">
+                          <div className="space-y-1">
+                            <div className="text-slate-600 font-medium">
+                              <span className="font-semibold text-slate-700">Registrado:</span>{' '}
+                              {pedido.fechaRegistro || pedido.fecha
+                                ? new Date(pedido.fechaRegistro || pedido.fecha).toLocaleString('es-PE')
+                                : '—'}
+                            </div>
+                            <div>
+                              {pedido.fechaEntrega ? (
+                                <span className="text-blue-700 font-semibold bg-blue-50/80 px-2 py-0.5 rounded border border-blue-200/60 inline-flex items-center gap-1">
+                                  <span>📅 Entrega:</span>
+                                  <span>{new Date(pedido.fechaEntrega).toLocaleString('es-PE')}</span>
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 italic text-[11px]">
+                                  Sin fecha asignada
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-5 py-4 text-slate-600">
                           {pedido.clienteTelefono || '—'}
@@ -935,6 +1055,19 @@ export default function PedidosPage() {
                               </svg>
                               <span>Ver Pagos</span>
                             </button>
+
+                            {/* Botón WhatsApp */}
+                            <button
+                              type="button"
+                              onClick={() => enviarComprobanteWhatsApp(pedido)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-lg text-xs font-semibold shadow-2xs transition-all cursor-pointer shrink-0"
+                              title={`Enviar comprobante por WhatsApp a ${pedido.clienteNombre || 'Cliente'}`}
+                            >
+                              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                                <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+                              </svg>
+                              <span>WhatsApp</span>
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -944,23 +1077,46 @@ export default function PedidosPage() {
               </table>
             </div>
 
-            {/* Footer de la tabla con contador */}
-            <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
-              <span>
-                Mostrando <strong>{pedidosFiltrados.length}</strong> de <strong>{pedidos.length}</strong> pedidos
-              </span>
-              {(busqueda || filtroEstado !== 'TODOS') && (
+            {/* Controles de paginación y navegación */}
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+              <div className="flex items-center gap-3">
+                <span>
+                  Mostrando página <strong className="text-slate-800">{page + 1}</strong> de{' '}
+                  <strong className="text-slate-800">{totalPages}</strong>{' '}
+                  <span className="text-slate-500">({totalElements} registros en total)</span>
+                </span>
+                {(busqueda || filtroEstado !== 'TODOS') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBusqueda('');
+                      setFiltroEstado('TODOS');
+                    }}
+                    className="text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer underline"
+                  >
+                    Limpiar filtros
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setBusqueda('');
-                    setFiltroEstado('TODOS');
-                  }}
-                  className="text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="px-4 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
                 >
-                  Limpiar filtros
+                  Anterior
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                  className="px-4 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-xl hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                >
+                  Siguiente
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1135,13 +1291,24 @@ export default function PedidosPage() {
                   </span>
                 </div>
 
-                {selectedPedido.fecha && (
-                  <div className="sm:col-span-3">
+                {(selectedPedido.fechaRegistro || selectedPedido.fecha) && (
+                  <div>
                     <span className="text-xs font-medium text-slate-500 block">
                       Fecha de Registro
                     </span>
                     <span className="text-sm font-semibold text-slate-800">
-                      {new Date(selectedPedido.fecha).toLocaleString()}
+                      {new Date(selectedPedido.fechaRegistro || selectedPedido.fecha).toLocaleString('es-PE')}
+                    </span>
+                  </div>
+                )}
+
+                {selectedPedido.fechaEntrega && (
+                  <div>
+                    <span className="text-xs font-medium text-slate-500 block">
+                      Fecha Estimada de Entrega
+                    </span>
+                    <span className="text-sm font-semibold text-blue-700">
+                      📅 {new Date(selectedPedido.fechaEntrega).toLocaleString('es-PE')}
                     </span>
                   </div>
                 )}
@@ -1243,7 +1410,20 @@ export default function PedidosPage() {
                       d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4H7v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
                     />
                   </svg>
-                  Imprimir Proforma
+                  <span>Imprimir Proforma</span>
+                </button>
+
+                {/* Botón Enviar WhatsApp desde Modal */}
+                <button
+                  type="button"
+                  onClick={() => enviarComprobanteWhatsApp(selectedPedido)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-lg text-sm font-semibold shadow-xs transition-colors cursor-pointer"
+                  title="Enviar comprobante por WhatsApp al cliente"
+                >
+                  <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                    <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+                  </svg>
+                  <span>WhatsApp</span>
                 </button>
 
                 {Number(selectedPedido.saldoPendiente || 0) > 0 && (

@@ -22,5 +22,6 @@ public class PedidoRequestDTO {
     private BigDecimal montoAdelanto;
     private String tipoComprobante;
     private String metodoPago;
+    private java.time.LocalDateTime fechaEntrega;
     private List<DetallePedidoRequestDTO> detalles;
 }

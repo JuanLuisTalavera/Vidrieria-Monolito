@@ -4,6 +4,7 @@ import com.vidrieria.backend_vidrieria.dto.FormulaDespieceRequestDTO;
 import com.vidrieria.backend_vidrieria.dto.FormulaDespieceResponseDTO;
 import com.vidrieria.backend_vidrieria.entity.FormulaDespiece;
 import com.vidrieria.backend_vidrieria.repository.FormulaDespieceRepository;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,10 +18,24 @@ public class FormulaDespieceService {
     private final FormulaDespieceRepository formulaDespieceRepository;
 
     @Transactional(readOnly = true)
+    public List<FormulaDespieceResponseDTO> listarTodas() {
+        return formulaDespieceRepository.findAll().stream()
+                .map(this::mapToDTO)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<FormulaDespieceResponseDTO> listarPorSistema(Integer idSistema) {
         return formulaDespieceRepository.findByIdSistema(idSistema).stream()
                 .map(this::mapToDTO)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public FormulaDespieceResponseDTO obtenerPorId(Integer id) {
+        FormulaDespiece formula = formulaDespieceRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Fórmula de despiece no encontrada con ID: " + id));
+        return mapToDTO(formula);
     }
 
     @Transactional
@@ -37,6 +52,31 @@ public class FormulaDespieceService {
 
         FormulaDespiece guardada = formulaDespieceRepository.save(formula);
         return mapToDTO(guardada);
+    }
+
+    @Transactional
+    public FormulaDespieceResponseDTO actualizarFormula(Integer id, FormulaDespieceRequestDTO requestDTO) {
+        FormulaDespiece formula = formulaDespieceRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Fórmula de despiece no encontrada con ID: " + id));
+
+        formula.setIdSistema(requestDTO.getIdSistema());
+        formula.setTipoElemento(requestDTO.getTipoElemento());
+        formula.setIdMaterialDefecto(requestDTO.getIdMaterialDefecto());
+        formula.setCantidadPiezas(requestDTO.getCantidadPiezas());
+        formula.setFormulaLargo(requestDTO.getFormulaLargo());
+        formula.setFormulaAlto(requestDTO.getFormulaAlto());
+        formula.setDescripcion(requestDTO.getDescripcion());
+
+        FormulaDespiece actualizada = formulaDespieceRepository.save(formula);
+        return mapToDTO(actualizada);
+    }
+
+    @Transactional
+    public void eliminarFormula(Integer id) {
+        FormulaDespiece formula = formulaDespieceRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Fórmula de despiece no encontrada con ID: " + id));
+
+        formulaDespieceRepository.delete(formula);
     }
 
     private FormulaDespieceResponseDTO mapToDTO(FormulaDespiece entity) {

@@ -2,8 +2,10 @@ package com.vidrieria.backend_vidrieria.service;
 
 import com.vidrieria.backend_vidrieria.dto.MaterialRequestDTO;
 import com.vidrieria.backend_vidrieria.dto.MaterialResponseDTO;
+import com.vidrieria.backend_vidrieria.entity.CategoriaMaterial;
 import com.vidrieria.backend_vidrieria.entity.Material;
 import com.vidrieria.backend_vidrieria.repository.MaterialRepository;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,20 +22,38 @@ public class MaterialService {
 
     @Transactional(readOnly = true)
     public List<MaterialResponseDTO> listarActivos() {
-        return materialRepository.findByActivoTrue().stream()
+        return listarActivos(null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<MaterialResponseDTO> listarActivos(CategoriaMaterial categoria) {
+        List<Material> lista = (categoria != null)
+                ? materialRepository.findByActivoTrueAndTipoMaterial(categoria)
+                : materialRepository.findByActivoTrue();
+
+        return lista.stream()
                 .map(this::mapToDTO)
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<MaterialResponseDTO> listar(CategoriaMaterial categoria) {
+        return listarActivos(categoria);
+    }
+
     /**
-     * Crea un nuevo material (moldura) marcándolo como activo.
+     * Crea un nuevo material marcándolo como activo.
      */
     @Transactional
     public MaterialResponseDTO crear(MaterialRequestDTO request) {
+        CategoriaMaterial categoria = (request.getTipoMaterial() != null)
+                ? request.getTipoMaterial()
+                : CategoriaMaterial.MOLDURA;
+
         Material material = Material.builder()
                 .nombre(request.getNombre())
                 .descripcion(request.getDescripcion())
-                .tipoMaterial(request.getTipoMaterial())
+                .tipoMaterial(categoria)
                 .imagenUrl(request.getImagenUrl())
                 .costoDefectoUnitario(request.getCostoDefectoUnitario())
                 .idProveedorHabitual(request.getIdProveedorHabitual())
@@ -42,6 +62,7 @@ public class MaterialService {
                 .margenMayorista(request.getMargenMayorista())
                 .margenPublico(request.getMargenPublico())
                 .margenCorteChico(request.getMargenCorteChico())
+                .stock(request.getStock() != null ? request.getStock() : 0.0)
                 .activo(true)
                 .build();
 
@@ -55,19 +76,30 @@ public class MaterialService {
     @Transactional
     public MaterialResponseDTO actualizar(Integer id, MaterialRequestDTO request) {
         Material material = materialRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Material no encontrado"));
+                .orElseThrow(() -> new EntityNotFoundException("Material no encontrado con ID: " + id));
 
         material.setNombre(request.getNombre());
         material.setDescripcion(request.getDescripcion());
-        material.setTipoMaterial(request.getTipoMaterial());
-        material.setImagenUrl(request.getImagenUrl());
+        if (request.getTipoMaterial() != null) {
+            material.setTipoMaterial(request.getTipoMaterial());
+        }
+        if (request.getImagenUrl() != null) {
+            material.setImagenUrl(request.getImagenUrl());
+        }
+        if (request.getIdProveedorHabitual() != null) {
+            material.setIdProveedorHabitual(request.getIdProveedorHabitual());
+        }
+
+        // Asignación explícita de campos numéricos de costos, dimensiones y márgenes
         material.setCostoDefectoUnitario(request.getCostoDefectoUnitario());
-        material.setIdProveedorHabitual(request.getIdProveedorHabitual());
         material.setPrecioVarilla(request.getPrecioVarilla());
         material.setLongitudVarilla(request.getLongitudVarilla());
         material.setMargenMayorista(request.getMargenMayorista());
         material.setMargenPublico(request.getMargenPublico());
         material.setMargenCorteChico(request.getMargenCorteChico());
+        if (request.getStock() != null) {
+            material.setStock(request.getStock());
+        }
 
         Material guardado = materialRepository.save(material);
         return mapToDTO(guardado);
@@ -79,7 +111,7 @@ public class MaterialService {
     @Transactional
     public void eliminar(Integer id) {
         Material material = materialRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Material no encontrado"));
+                .orElseThrow(() -> new EntityNotFoundException("Material no encontrado con ID: " + id));
 
         material.setActivo(false);
         materialRepository.save(material);
@@ -99,8 +131,16 @@ public class MaterialService {
         return MaterialResponseDTO.builder()
                 .idMaterial(m.getIdMaterial())
                 .nombre(m.getNombre())
+                .descripcion(m.getDescripcion())
                 .tipoMaterial(m.getTipoMaterial())
+                .imagenUrl(m.getImagenUrl())
+                .costoDefectoUnitario(m.getCostoDefectoUnitario())
+                .idProveedorHabitual(m.getIdProveedorHabitual())
+                .precioVarilla(precioVarilla)
                 .longitudVarilla(m.getLongitudVarilla())
+                .margenMayorista(margenMay)
+                .margenPublico(margenPub)
+                .margenCorteChico(margenChico)
                 // Precios por metro lineal
                 .costoRealMetro(costoRealMetro)
                 .precioMayoristaMetro(aplicarMargen(costoRealMetro, margenMay))
@@ -110,6 +150,7 @@ public class MaterialService {
                 .precioMayoristaVarilla(aplicarMargen(precioVarilla, margenMay))
                 .precioPublicoVarilla(aplicarMargen(precioVarilla, margenPub))
                 .precioCorteChicoVarilla(aplicarMargen(precioVarilla, margenChico))
+                .stock(m.getStock() != null ? m.getStock() : 0.0)
                 .build();
     }
 

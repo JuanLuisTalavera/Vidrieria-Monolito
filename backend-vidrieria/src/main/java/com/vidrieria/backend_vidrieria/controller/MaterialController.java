@@ -2,6 +2,7 @@ package com.vidrieria.backend_vidrieria.controller;
 
 import com.vidrieria.backend_vidrieria.dto.MaterialRequestDTO;
 import com.vidrieria.backend_vidrieria.dto.MaterialResponseDTO;
+import com.vidrieria.backend_vidrieria.entity.CategoriaMaterial;
 import com.vidrieria.backend_vidrieria.service.MaterialService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -11,18 +12,20 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/v1/materiales")
+@RequestMapping({"/api/v1/materiales", "/api/materiales"})
 @RequiredArgsConstructor
 public class MaterialController {
 
     private final MaterialService materialService;
 
     /**
-     * Devuelve todos los materiales (molduras) activos con precios calculados dinámicamente.
+     * Devuelve todos los materiales activos con precios calculados dinámicamente,
+     * opcionalmente filtrados por categoría (MOLDURA, PERFIL_ALUMINIO, ACCESORIO, OTROS).
      */
     @GetMapping
-    public ResponseEntity<List<MaterialResponseDTO>> listarActivos() {
-        return ResponseEntity.ok(materialService.listarActivos());
+    public ResponseEntity<List<MaterialResponseDTO>> listarActivos(
+            @RequestParam(required = false) CategoriaMaterial categoria) {
+        return ResponseEntity.ok(materialService.listarActivos(categoria));
     }
 
     /**

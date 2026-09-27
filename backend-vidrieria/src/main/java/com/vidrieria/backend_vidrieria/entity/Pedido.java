@@ -63,6 +63,9 @@ public class Pedido {
     @Column(name = "fecha_registro")
     private java.time.LocalDateTime fechaRegistro;
 
+    @Column(name = "fecha_entrega")
+    private java.time.LocalDateTime fechaEntrega;
+
     @OneToMany(mappedBy = "pedido", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     private List<DetallePedido> detalles = new ArrayList<>();

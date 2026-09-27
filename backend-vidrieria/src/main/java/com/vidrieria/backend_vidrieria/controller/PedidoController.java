@@ -4,6 +4,7 @@ import com.vidrieria.backend_vidrieria.dto.PedidoRequestDTO;
 import com.vidrieria.backend_vidrieria.dto.PedidoResponseDTO;
 import com.vidrieria.backend_vidrieria.service.PedidoService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +24,17 @@ public class PedidoController {
     @GetMapping
     public ResponseEntity<List<PedidoResponseDTO>> listarPedidos() {
         return ResponseEntity.ok(pedidoService.listarTodos());
+    }
+
+    /**
+     * Devuelve el listado paginado de pedidos optimizado en memoria.
+     */
+    @GetMapping("/paginados")
+    public ResponseEntity<Page<PedidoResponseDTO>> listarPaginados(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "DESC") String sortDir) {
+        return ResponseEntity.ok(pedidoService.listarPaginados(page, size, sortDir));
     }
 
     /**
@@ -52,6 +64,18 @@ public class PedidoController {
             @RequestParam String estado) {
 
         PedidoResponseDTO response = pedidoService.actualizarEstado(id, estado);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Confirma un pedido y descuenta el inventario real bajo transacción.
+     *
+     * @param id ID del pedido a confirmar.
+     * @return Pedido confirmado con estado CONFIRMADO.
+     */
+    @PatchMapping("/{id}/confirmar")
+    public ResponseEntity<PedidoResponseDTO> confirmarPedido(@PathVariable Integer id) {
+        PedidoResponseDTO response = pedidoService.confirmarPedido(id);
         return ResponseEntity.ok(response);
     }
 

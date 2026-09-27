@@ -27,8 +27,10 @@ public class Material {
     @Column(name = "descripcion", columnDefinition = "TEXT")
     private String descripcion;
 
+    @Convert(converter = CategoriaMaterialConverter.class)
     @Column(name = "tipo_material", length = 50)
-    private String tipoMaterial;
+    @Builder.Default
+    private CategoriaMaterial tipoMaterial = CategoriaMaterial.OTROS;
 
     @Column(name = "imagen_url", length = 255)
     private String imagenUrl;
@@ -58,4 +60,8 @@ public class Material {
 
     @Column(name = "margen_corte_chico", precision = 5, scale = 4)
     private BigDecimal margenCorteChico;
+
+    @Column(name = "stock")
+    @Builder.Default
+    private Double stock = 0.0;
 }

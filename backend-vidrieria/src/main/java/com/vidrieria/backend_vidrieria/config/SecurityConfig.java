@@ -8,6 +8,8 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -25,6 +27,7 @@ import java.util.List;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
@@ -44,6 +47,11 @@ public class SecurityConfig {
                                 "/swagger-ui.html",
                                 "/v3/api-docs/**"
                         ).permitAll()
+                        // Reglas de autorización para servicios extras
+                        .requestMatchers(HttpMethod.GET, "/api/v1/servicios-extras/**").hasAnyRole("ADMIN", "OPERARIO")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/servicios-extras/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/servicios-extras/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/servicios-extras/**").hasRole("ADMIN")
                         // Todo lo demás requiere autenticación
                         .anyRequest().authenticated()
                 )
