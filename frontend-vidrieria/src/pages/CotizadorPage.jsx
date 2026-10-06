@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import axiosClient from '../api/axiosClient';
+import * as inventarioService from '../services/inventario.service';
+import * as clienteService from '../services/cliente.service';
+import * as pedidoService from '../services/pedido.service';
 import { usePedido } from '../context/PedidoContext';
 import { enviarComprobanteWhatsApp } from '../utils/whatsappHelper';
 import TrazadoVarillasGrafico from './components/TrazadoVarillasGrafico';
@@ -179,12 +181,10 @@ export default function CotizadorPage() {
     setMensajeCRM(null);
 
     try {
-      const res = await axiosClient.get(
-        `/api/v1/clientes/buscar/documento/${encodeURIComponent(docABuscar)}`
-      );
+      const data = await clienteService.buscarClientePorDocumento(docABuscar);
 
-      if (res.data) {
-        const c = res.data;
+      if (data) {
+        const c = data;
         const nombreObtenido = c.nombreRazonSocial || c.nombre || c.razonSocial || '';
         const telefonoObtenido = c.telefono || c.celular || '';
         const direccionObtenida = c.direccion || '';
@@ -259,8 +259,8 @@ export default function CotizadorPage() {
         direccion: clienteDireccion.trim(),
       };
 
-      const res = await axiosClient.post('/api/v1/clientes', payload);
-      if (res.status === 200 || res.status === 201 || res.data) {
+      const resData = await clienteService.crearCliente(payload);
+      if (resData) {
         alert('Cliente guardado exitosamente');
         setEsClienteNuevo(false);
         setEstadoCliente('encontrado');
@@ -294,20 +294,17 @@ export default function CotizadorPage() {
     const cargarCatalogos = async () => {
       try {
         const [resVidrios, resMateriales, resEstandar, resServicios] = await Promise.all([
-          axiosClient.get('/api/v1/vidrios'),
-          axiosClient.get('/api/v1/materiales', {
-            params: { categoria: 'MOLDURA' },
-          }),
-          axiosClient.get('/api/v1/materiales?categoria=PRODUCTO_ESTANDAR'),
-          axiosClient.get('/api/v1/servicios-extras').catch(() => ({ data: [] })),
+          inventarioService.obtenerVidrios(),
+          inventarioService.obtenerMateriales('MOLDURA'),
+          inventarioService.obtenerMateriales('PRODUCTO_ESTANDAR'),
+          inventarioService.obtenerServiciosExtras().catch(() => []),
         ]);
         if (isMounted) {
-          const listVidrios = Array.isArray(resVidrios.data) ? resVidrios.data : [];
-          setVidrios(listVidrios);
-          setMolduras(Array.isArray(resMateriales.data) ? resMateriales.data : []);
-          setProductosEstandar(Array.isArray(resEstandar.data) ? resEstandar.data : []);
-          if (Array.isArray(resServicios?.data)) {
-            setServiciosExtras(resServicios.data);
+          setVidrios(Array.isArray(resVidrios) ? resVidrios : []);
+          setMolduras(Array.isArray(resMateriales) ? resMateriales : []);
+          setProductosEstandar(Array.isArray(resEstandar) ? resEstandar : []);
+          if (Array.isArray(resServicios)) {
+            setServiciosExtras(resServicios);
           }
         }
       } catch (error) {
@@ -425,17 +422,17 @@ export default function CotizadorPage() {
     };
 
     try {
-      const res = await axiosClient.post('/api/v1/pedidos', datosPedido);
+      const data = await pedidoService.crearPedido(datosPedido);
       const pedidoCreado = {
-        ...(res.data || {}),
-        idPedido: res.data?.idPedido || res.data?.id,
+        ...(data || {}),
+        idPedido: data?.idPedido || data?.id,
         clienteNombre: datosPedido.clienteNombre,
         clienteTelefono: datosPedido.clienteTelefono,
         total: totalPedido,
         montoAdelanto: adelantoNum,
         saldoPendiente: saldo,
         fechaEntrega: datosPedido.fechaEntrega,
-        estado: res.data?.estado || 'COTIZADO',
+        estado: data?.estado || 'COTIZADO',
         detalles: [...carritoGlobal],
       };
 

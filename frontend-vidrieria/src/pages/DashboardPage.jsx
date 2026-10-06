@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import axiosClient from '../api/axiosClient';
+import * as dashboardService from '../services/dashboard.service';
 
 export default function DashboardPage() {
   const [resumen, setResumen] = useState(null);
@@ -13,8 +13,8 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await axiosClient.get(`/api/v1/dashboard/resumen?fecha=${fecha}`);
-      setResumen(response.data);
+      const data = await dashboardService.obtenerResumenDashboard(fecha);
+      setResumen(data);
       setLastUpdated(new Date());
     } catch (err) {
       console.error('Error al cargar el resumen del dashboard:', err);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import axiosClient from '../../../api/axiosClient';
+import * as inventarioService from '../../../services/inventario.service';
 
 // Helper para normalizar márgenes
 const normalizarMargenAString = (val, defecto = '30') => {
@@ -121,11 +121,11 @@ export default function ModalMaterial({ isOpen, onClose, modoEdicion, itemToEdit
       }
 
       if (!modoEdicion) {
-        await axiosClient.post('/api/v1/materiales', payload);
+        await inventarioService.crearMaterial(payload);
         showToast(`Material "${payload.nombre}" agregado correctamente.`);
       } else {
         const id = itemToEdit.idMaterial ?? itemToEdit.id;
-        await axiosClient.put(`/api/v1/materiales/${id}`, payload);
+        await inventarioService.actualizarMaterial(id, payload);
         showToast(`Material "${payload.nombre}" actualizado con éxito.`);
       }
 

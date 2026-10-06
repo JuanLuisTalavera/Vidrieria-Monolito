@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axiosClient from '../../../api/axiosClient';
+import * as inventarioService from '../../../services/inventario.service';
 
 export default function ModalServicio({ isOpen, onClose, modoEdicion, itemToEdit, onSuccess, showToast }) {
   const [formServicio, setFormServicio] = useState({
@@ -47,11 +47,11 @@ export default function ModalServicio({ isOpen, onClose, modoEdicion, itemToEdit
       };
 
       if (!modoEdicion) {
-        await axiosClient.post('/api/v1/servicios-extras', payload);
+        await inventarioService.crearServicioExtra(payload);
         showToast(`Servicio "${payload.nombre}" agregado correctamente.`);
       } else {
         const id = itemToEdit.idServicioExtra ?? itemToEdit.idExtra ?? itemToEdit.id;
-        await axiosClient.put(`/api/v1/servicios-extras/${id}`, payload);
+        await inventarioService.actualizarServicioExtra(id, payload);
         showToast(`Servicio "${payload.nombre}" actualizado con éxito.`);
       }
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axiosClient from '../api/axiosClient';
+import * as clienteService from '../services/cliente.service';
 
 export default function ClientesPage() {
   const navigate = useNavigate();
@@ -45,8 +45,8 @@ export default function ClientesPage() {
     if (showLoading) setLoading(true);
     setError(null);
     try {
-      const res = await axiosClient.get('/api/v1/clientes');
-      const data = Array.isArray(res.data) ? res.data : [];
+      const res = await clienteService.obtenerClientes();
+      const data = Array.isArray(res) ? res : [];
       setClientes(data);
     } catch (err) {
       console.error('Error al cargar la cartera de clientes:', err);
@@ -58,11 +58,11 @@ export default function ClientesPage() {
 
   useEffect(() => {
     let cancel = false;
-    axiosClient
-      .get('/api/v1/clientes')
+    clienteService
+      .obtenerClientes()
       .then((res) => {
         if (!cancel) {
-          setClientes(Array.isArray(res.data) ? res.data : []);
+          setClientes(Array.isArray(res) ? res : []);
           setLoading(false);
         }
       })
@@ -141,14 +141,14 @@ export default function ClientesPage() {
       };
 
       if (modalMode === 'create') {
-        const res = await axiosClient.post('/api/v1/clientes', payload);
-        const nuevoCliente = res.data || payload;
+        const res = await clienteService.crearCliente(payload);
+        const nuevoCliente = res || payload;
         setClientes((prev) => [nuevoCliente, ...prev]);
         showToast(`Cliente "${payload.nombre}" registrado exitosamente.`);
       } else {
         const id = editingCliente.idCliente ?? editingCliente.id;
-        const res = await axiosClient.put(`/api/v1/clientes/${id}`, payload);
-        const clienteActualizado = res.data || { ...editingCliente, ...payload };
+        const res = await clienteService.actualizarCliente(id, payload);
+        const clienteActualizado = res || { ...editingCliente, ...payload };
         setClientes((prev) =>
           prev.map((c) => ((c.idCliente ?? c.id) === id ? clienteActualizado : c))
         );
@@ -178,7 +178,7 @@ export default function ClientesPage() {
     if (!confirmado) return;
 
     try {
-      await axiosClient.delete(`/api/v1/clientes/${id}`);
+      await clienteService.eliminarCliente(id);
       setClientes((prev) => prev.filter((c) => (c.idCliente ?? c.id) !== id));
       showToast(`Cliente "${nombre}" eliminado con éxito.`);
     } catch (err) {

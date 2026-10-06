@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import axiosClient from '../../../api/axiosClient';
+import * as inventarioService from '../../../services/inventario.service';
 
 // Helper para normalizar márgenes
 const normalizarMargenAString = (val, defecto = '30') => {
@@ -130,11 +130,11 @@ export default function ModalVidrio({ isOpen, onClose, modoEdicion, itemToEdit, 
       };
 
       if (!modoEdicion) {
-        await axiosClient.post('/api/v1/vidrios', payload);
+        await inventarioService.crearVidrio(payload);
         showToast(`Vidrio "${payload.nombre}" agregado correctamente.`);
       } else {
         const id = itemToEdit.idVidrio ?? itemToEdit.id;
-        await axiosClient.put(`/api/v1/vidrios/${id}`, payload);
+        await inventarioService.actualizarVidrio(id, payload);
         showToast(`Vidrio "${payload.nombre}" actualizado con éxito.`);
       }
 

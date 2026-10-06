@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import axiosClient from '../../../api/axiosClient';
+import * as cotizadorService from '../../../services/cotizador.service';
 import {
   CheckCircle2,
   Copy,
@@ -263,8 +263,7 @@ export default function FormularioVidrioSuelto({
     try {
       let data = null;
       try {
-        const response = await axiosClient.post('/api/v1/cotizador/vidrio-suelto', payload);
-        data = response?.data || null;
+        data = await cotizadorService.calcularVidrioSuelto(payload);
         console.log("Respuesta de Cotización del Backend:", data);
       } catch (apiErr) {
         console.warn("Aviso del endpoint de cotización, usando cálculo local reactivo:", apiErr);

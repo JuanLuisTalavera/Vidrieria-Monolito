@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import axiosClient from '../api/axiosClient';
+import * as inventarioService from '../services/inventario.service';
 import ModalMaterial from './inventario/components/ModalMaterial';
 import ModalVidrio from './inventario/components/ModalVidrio';
 import ModalServicio from './inventario/components/ModalServicio';
@@ -104,8 +104,8 @@ export default function InventarioPage() {
   // Recarga individual de materiales / molduras
   const fetchMateriales = async () => {
     try {
-      const res = await axiosClient.get('/api/v1/materiales');
-      setMolduras(Array.isArray(res.data) ? res.data : []);
+      const res = await inventarioService.obtenerMateriales();
+      setMolduras(Array.isArray(res) ? res : []);
     } catch (err) {
       console.error('Error al recargar materiales:', err);
     }
@@ -114,8 +114,8 @@ export default function InventarioPage() {
   // Recarga individual de tipos de vidrio
   const fetchVidrios = async () => {
     try {
-      const res = await axiosClient.get('/api/v1/vidrios');
-      setVidrios(Array.isArray(res.data) ? res.data : []);
+      const res = await inventarioService.obtenerVidrios();
+      setVidrios(Array.isArray(res) ? res : []);
     } catch (err) {
       console.error('Error al recargar vidrios:', err);
     }
@@ -124,8 +124,8 @@ export default function InventarioPage() {
   // Recarga individual de servicios y manufactura
   const fetchServicios = async () => {
     try {
-      const res = await axiosClient.get('/api/v1/servicios-extras');
-      setServicios(Array.isArray(res.data) ? res.data : []);
+      const res = await inventarioService.obtenerServiciosExtras();
+      setServicios(Array.isArray(res) ? res : []);
     } catch (err) {
       console.error('Error al recargar servicios:', err);
     }
@@ -148,18 +148,18 @@ export default function InventarioPage() {
   useEffect(() => {
     let cancel = false;
     Promise.all([
-      axiosClient.get('/api/v1/materiales'),
-      axiosClient.get('/api/v1/vidrios'),
-      axiosClient.get('/api/v1/servicios-extras').catch((err) => {
+      inventarioService.obtenerMateriales(),
+      inventarioService.obtenerVidrios(),
+      inventarioService.obtenerServiciosExtras().catch((err) => {
         console.warn('Endpoint /api/v1/servicios-extras pendiente o no disponible aún:', err);
-        return { data: [] };
+        return [];
       }),
     ])
       .then(([resMolduras, resVidrios, resServicios]) => {
         if (!cancel) {
-          setMolduras(Array.isArray(resMolduras.data) ? resMolduras.data : []);
-          setVidrios(Array.isArray(resVidrios.data) ? resVidrios.data : []);
-          setServicios(Array.isArray(resServicios?.data) ? resServicios.data : []);
+          setMolduras(Array.isArray(resMolduras) ? resMolduras : []);
+          setVidrios(Array.isArray(resVidrios) ? resVidrios : []);
+          setServicios(Array.isArray(resServicios) ? resServicios : []);
           setLoading(false);
         }
       })
@@ -208,7 +208,7 @@ export default function InventarioPage() {
       if (!confirmacion) return;
 
       try {
-        await axiosClient.delete(`/api/v1/servicios-extras/${id}`);
+        await inventarioService.eliminarServicioExtra(id);
         setServicios((prev) => prev.filter((s) => (s.idServicioExtra ?? s.idExtra ?? s.id) !== id));
         showToast(`Servicio "${nombre}" eliminado del catálogo.`);
       } catch (err) {
@@ -229,8 +229,11 @@ export default function InventarioPage() {
     if (!confirmacion) return;
 
     try {
-      const endpoint = esMoldura ? `/api/v1/materiales/${id}` : `/api/v1/vidrios/${id}`;
-      await axiosClient.delete(endpoint);
+      if (esMoldura) {
+        await inventarioService.eliminarMaterial(id);
+      } else {
+        await inventarioService.eliminarVidrio(id);
+      }
 
       // Actualización reactiva inmediata en estado local
       if (esMoldura) {

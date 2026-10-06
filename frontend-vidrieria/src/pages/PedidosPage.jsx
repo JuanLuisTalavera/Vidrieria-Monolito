@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import axiosClient from '../api/axiosClient';
+import * as pedidoService from '../services/pedido.service';
 
 // Configuración de los estados del taller de marquería
 const ESTADOS_TALLER = [
@@ -113,10 +113,10 @@ export default function PedidosPage() {
 
     try {
       // 1. Siempre consultar el endpoint del backend para obtener la lista real de todos los pagos
-      const res = await axiosClient.get(`/api/v1/pedidos/${pedido.idPedido}/pagos`);
-      const dataPagos = Array.isArray(res.data)
-        ? res.data
-        : (res.data?.content || res.data?.pagos || res.data?.data || []);
+      const resData = await pedidoService.obtenerPagosPedido(pedido.idPedido);
+      const dataPagos = Array.isArray(resData)
+        ? resData
+        : (resData?.content || resData?.pagos || resData?.data || []);
 
       if (Array.isArray(dataPagos) && dataPagos.length > 0) {
         setListaPagos(dataPagos);
@@ -213,8 +213,8 @@ export default function PedidosPage() {
         medioPago: metodoPagoAbono,
       };
 
-      await axiosClient.post(
-        `/api/v1/pedidos/${pedidoParaAbono.idPedido}/pagos`,
+      await pedidoService.registrarPagoPedido(
+        pedidoParaAbono.idPedido,
         payload
       );
 
@@ -257,13 +257,11 @@ export default function PedidosPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await axiosClient.get(
-          `/api/v1/pedidos/paginados?page=${pageToFetch}&size=20&sortDir=${sortDir}`
-        );
-        const content = Array.isArray(res.data?.content) ? res.data.content : [];
+        const resData = await pedidoService.obtenerPedidosPaginados(pageToFetch, sortDir, 20);
+        const content = Array.isArray(resData?.content) ? resData.content : [];
         setPedidos(content);
-        setTotalPages(res.data?.totalPages > 0 ? res.data.totalPages : 1);
-        setTotalElements(res.data?.totalElements ?? 0);
+        setTotalPages(resData?.totalPages > 0 ? resData.totalPages : 1);
+        setTotalElements(resData?.totalElements ?? 0);
       } catch (err) {
         console.error('Error al obtener los pedidos:', err);
         setError('No se pudo cargar la lista de pedidos. Por favor, intenta de nuevo.');
@@ -286,13 +284,11 @@ export default function PedidosPage() {
     setError(null);
 
     try {
-      const response = await axiosClient.patch(
-        `/api/v1/pedidos/${idPedido}/estado?estado=${nuevoEstado}`
-      );
+      const responseData = await pedidoService.actualizarEstadoPedidoPatch(idPedido, nuevoEstado);
 
       const dataActualizada =
-        response.data && typeof response.data === 'object' && response.data.idPedido
-          ? response.data
+        responseData && typeof responseData === 'object' && responseData.idPedido
+          ? responseData
           : { estado: nuevoEstado };
 
       // Actualizar estado local usando .map sin recargar página
@@ -343,11 +339,11 @@ export default function PedidosPage() {
     setError(null);
 
     try {
-      const response = await axiosClient.patch(`/api/v1/pedidos/${idPedido}/liquidar`);
+      const responseData = await pedidoService.liquidarPedido(idPedido);
 
       const dataActualizada =
-        response.data && typeof response.data === 'object' && response.data.idPedido
-          ? response.data
+        responseData && typeof responseData === 'object' && responseData.idPedido
+          ? responseData
           : { saldoPendiente: 0, estado: 'ENTREGADO' };
 
       // Actualizar pedidos localmente con .map para refrescar la UI de inmediato
